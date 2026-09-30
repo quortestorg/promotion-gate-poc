@@ -44,13 +44,22 @@ jobs:
       head_sha: ${{ steps.push.outputs.head_sha }}
       cab_id: ${{ steps.cab.outputs.id }}
     steps:
+      # Token for pushing the branch, opening the PR and dispatching the gate. The built-in token
+      # cannot open PRs here (org policy) and PRs it opens never trigger other workflows, so the
+      # job mints a token from the same GitHub App that implements the gate (APP_ID variable and
+      # APP_PRIVATE_KEY secret), falling back to a PAT secret, then to the built-in token.
+      - name: Mint GitHub App token
+        id: app
+        if: ${{ vars.APP_ID != '' }}
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          # PROMOTION_TOKEN: fine-grained PAT (Contents RW, Pull requests RW, Actions RW) scoped to
-          # this repo. Needed because the org does not allow the built-in token to open PRs, and
-          # because PRs opened by the built-in token never trigger other workflows (render-check).
-          token: ${{ secrets.PROMOTION_TOKEN || github.token }}
+          token: ${{ steps.app.outputs.token || secrets.PROMOTION_TOKEN || github.token }}
 
       - name: Validate tag
         env:
@@ -115,7 +124,7 @@ jobs:
       - name: Open pull request
         id: pr
         env:
-          GH_TOKEN: ${{ secrets.PROMOTION_TOKEN || github.token }}
+          GH_TOKEN: ${{ steps.app.outputs.token || secrets.PROMOTION_TOKEN || github.token }}
           TAG: ${{ inputs.release_tag }}
           PREV: ${{ steps.prev.outputs.prev }}
           SRC: ${{ inputs.source_compare_url }}
@@ -200,7 +209,7 @@ jobs:
       - name: Link CAB on the PR
         if: ${{ steps.cab.outputs.id != '' }}
         env:
-          GH_TOKEN: ${{ secrets.PROMOTION_TOKEN || github.token }}
+          GH_TOKEN: ${{ steps.app.outputs.token || secrets.PROMOTION_TOKEN || github.token }}
           NUM: ${{ steps.pr.outputs.number }}
           CAB_ID: ${{ steps.cab.outputs.id }}
           CAB_URL: ${{ steps.cab.outputs.url }}
@@ -211,7 +220,7 @@ jobs:
 
       - name: Start the prod gate on the PR branch
         env:
-          GH_TOKEN: ${{ secrets.PROMOTION_TOKEN || github.token }}
+          GH_TOKEN: ${{ steps.app.outputs.token || secrets.PROMOTION_TOKEN || github.token }}
         run: |
           gh workflow run prod-gate.yml --ref "${{ steps.push.outputs.branch }}" \
             -f pr_number="${{ steps.pr.outputs.number }}" \

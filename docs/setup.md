@@ -42,7 +42,9 @@ gh label create promotion -R $REPO -c 0E8A16 -d "prod promotion PR"
 | `ADO_AREA_PATH` | variable | area path for CAB items (optional) |
 | `ADO_WORK_ITEM_TYPE` | variable | default `User Story` |
 | `ADO_PAT` | secret | PAT with Work Items read and write |
-| `PROMOTION_TOKEN` | secret | fine-grained GitHub PAT scoped to this repo: Contents RW, Pull requests RW, Actions RW. Required when the org does not let the built-in token create PRs. |
+| `APP_ID` | variable | the cab-checker GitHub App id; the workflow mints a token from it to push, open the PR and dispatch the gate |
+| `APP_PRIVATE_KEY` | secret | the app's private key (PEM) |
+| `PROMOTION_TOKEN` | secret | optional fallback: fine-grained PAT scoped to this repo (Contents, Pull requests, Actions RW) if the app token is not configured |
 
 Without `ADO_ORG_URL` the workflow still opens the PR and starts the gate, but no CAB item is
 created and the app reports "must reference exactly one CAB item" until one is linked by hand
