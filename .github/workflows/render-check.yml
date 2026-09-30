@@ -1,0 +1,25 @@
+name: render-check
+
+# Required status check on every PR: the committed rendered/prod.yaml must equal a fresh
+# kustomize build of environments/prod after normalization. This is what makes the
+# reviewed artifact and the source overlay the same thing.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  rendered-manifest-matches-sources:
+    name: rendered manifest matches sources
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: |
+          pip install --quiet pyyaml
+          curl -sSL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.8.1/kustomize_v5.8.1_linux_amd64.tar.gz" | tar -xz -C /usr/local/bin kustomize
+      - run: bash tools/ci/render-prod.sh --check

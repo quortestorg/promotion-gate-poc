@@ -1,0 +1,73 @@
+# ===== apps/v1/Deployment prod/web =====
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  annotations:
+    poc.example.com/release-tag: v0.0.0
+  labels:
+    app: web
+    environment: prod
+  name: web
+  namespace: prod
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      annotations:
+        poc.example.com/release-tag: v0.0.0
+      labels:
+        app: web
+    spec:
+      containers:
+      - envFrom:
+        - configMapRef:
+            name: web-config
+        image: ghcr.io/example/web:1.0.0
+        livenessProbe:
+          httpGet:
+            path: /health/live
+            port: 8080
+        name: web
+        ports:
+        - containerPort: 8080
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 8080
+
+# ===== v1/ConfigMap prod/web-config =====
+apiVersion: v1
+data:
+  FEATURE_FLAGS: ''
+  LOG_LEVEL: warn
+kind: ConfigMap
+metadata:
+  annotations:
+    poc.example.com/release-tag: v0.0.0
+  labels:
+    environment: prod
+  name: web-config
+  namespace: prod
+
+# ===== v1/Service prod/web =====
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    poc.example.com/release-tag: v0.0.0
+  labels:
+    app: web
+    environment: prod
+  name: web
+  namespace: prod
+spec:
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+  selector:
+    app: web
+

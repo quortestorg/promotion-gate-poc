@@ -1,0 +1,68 @@
+name: prod-gate
+
+# Gate C proof of concept, step 2 of 2.
+#
+# Started by promote-prod.yml on the promotion branch, so this run's commit IS the PR head.
+# That matters twice: the environment's deployment record is bound to the PR head, which is
+# what the ruleset rule "require deployments to succeed before merging" checks; and the
+# cab-checker app compares this commit with the PR-HEAD-SHA recorded on the CAB item, so an
+# approval cannot carry over to a later push.
+#
+# The `gate` job targets environment `prod`. GitHub pauses it there until every protection
+# rule on the environment passes:
+#   1. required reviewers (owners, DevOps) approve in the run UI, and
+#   2. the cab-checker custom deployment protection rule approves, which it does only when the
+#      CAB work item carries both approval tags, added by authorized approvers, and the head SHA
+#      still matches.
+# When released, the job prints OK. Nothing is deployed; that is the whole PoC.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        required: true
+        type: string
+      cab_id:
+        required: false
+        type: string
+        default: ""
+      release_tag:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+  deployments: read
+
+concurrency:
+  group: prod-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    environment:
+      name: prod
+      url: ${{ github.server_url }}/${{ github.repository }}/pull/${{ inputs.pr_number }}
+    steps:
+      - name: Gate passed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "OK: prod gate passed for ${{ inputs.release_tag }}"
+          echo "  PR      #${{ inputs.pr_number }}"
+          echo "  CAB     AB#${{ inputs.cab_id }}"
+          echo "  commit  ${{ github.sha }}"
+          {
+            echo "## prod gate: OK"
+            echo
+            echo "| | |"; echo "|---|---|"
+            echo "| Release | \`${{ inputs.release_tag }}\` |"
+            echo "| PR | #${{ inputs.pr_number }} |"
+            echo "| CAB | AB#${{ inputs.cab_id }} |"
+            echo "| Gated commit | \`${{ github.sha }}\` |"
+            echo "| Approvals | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} (Deployments tab) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          gh pr comment "${{ inputs.pr_number }}" -R "${{ github.repository }}" --body \
+            "prod gate **OK** for \`${{ inputs.release_tag }}\` at \`${{ github.sha }}\` (run ${{ github.run_id }}). The merge is now unblocked by the \`prod\` deployment rule." || true

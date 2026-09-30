@@ -1,0 +1,21 @@
+{
+  "name": "cab-checker",
+  "url": "https://github.com/quortestorg/promotion-gate-poc",
+  "hook_attributes": {
+    "url": "https://REPLACE-ME.smee.io/cab-checker",
+    "active": true
+  },
+  "redirect_url": "https://github.com/quortestorg/promotion-gate-poc",
+  "description": "Custom deployment protection rule: releases the prod environment when the linked Azure DevOps CAB item is approved by the owner and security roles and the PR head is unchanged.",
+  "public": false,
+  "default_permissions": {
+    "actions": "read",
+    "deployments": "write",
+    "pull_requests": "read",
+    "contents": "read",
+    "metadata": "read"
+  },
+  "default_events": [
+    "deployment_protection_rule"
+  ]
+}
