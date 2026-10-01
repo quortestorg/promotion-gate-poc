@@ -179,17 +179,22 @@ jobs:
           python3 - <<'PY'
           import base64, json, os, urllib.request, urllib.parse
           e = os.environ
+          manifest_url = f"{e['REPO_URL']}/blob/{e['HEAD']}/rendered/prod.yaml"
           desc = f"""<p><b>Change:</b> promote release <b>{e['TAG']}</b> to prod (previous {e['PREV']}).</p>
           <p><b>Rendered manifest PR:</b> <a href="{e['PR_URL']}">{e['PR_URL']}</a></p>
+          <p><b>Resulting manifest at the reviewed commit:</b> <a href="{manifest_url}">rendered/prod.yaml @ {e['HEAD'][:12]}</a></p>
           <p><b>Commits included:</b> <a href="{e['REPO_URL']}/compare/{e['PREV']}...{e['HEAD']}">{e['PREV']}...{e['HEAD'][:12]}</a></p>
           {'<p><b>Source change:</b> <a href="'+e['SRC']+'">'+e['SRC']+'</a></p>' if e.get('SRC') else ''}
           <p><b>Pipeline run:</b> <a href="{e['RUN_URL']}">{e['RUN_URL']}</a></p>
-          <p><b>How to approve:</b> review the PR, then add tag <code>CAB-Approved-Owner</code> (service owner) or <code>CAB-Approved-Security</code> (Security). The gate releases when both tags are present and the PR head still equals the SHA below.</p>
-          <p>PR-HEAD-SHA: {e['HEAD']}</p>"""
+          <p><b>How to approve:</b> review the PR, then set <b>Owner Approver</b> (CAB owners group) or <b>Security Approver</b> (CAB Security group) to yourself. The gate releases when both are set and the PR head still equals <b>PR Head SHA</b>; the item then moves to ReadyForDeploy.</p>"""
           patch = [
             {"op":"add","path":"/fields/System.Title","value":f"CAB: promote {e['TAG']} to prod"},
             {"op":"add","path":"/fields/System.Description","value":desc},
-            {"op":"add","path":"/fields/System.Tags","value":"CAB; PromotionPoC"},
+            {"op":"add","path":"/fields/System.Tags","value":"PromotionPoC"},
+            {"op":"add","path":"/fields/Custom.PRHeadSHA","value":e['HEAD']},
+            {"op":"add","path":"/fields/Custom.PRUrl","value":e['PR_URL']},
+            {"op":"add","path":"/fields/Custom.ReleaseTag","value":e['TAG']},
+            {"op":"add","path":"/fields/Custom.AKSmanifest","value":manifest_url},
             {"op":"add","path":"/relations/-","value":{"rel":"Hyperlink","url":e['PR_URL'],"attributes":{"comment":"Rendered manifest PR"}}},
           ]
           if e.get("ADO_AREA_PATH"):

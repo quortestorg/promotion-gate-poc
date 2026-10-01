@@ -74,10 +74,18 @@ created and the app reports "must reference exactly one CAB item" until one is l
 
 ## 4. How approvers act
 
-The CAB item description says it. Review the PR linked on the item, then add the tag
-`CAB-Approved-Owner` or `CAB-Approved-Security`. The app reads the item's update history to
-see who added each tag and compares against `OWNER_APPROVERS` and `SECURITY_APPROVERS`. In a
-real build these become two fields with group-scoped write rules instead of tags.
+The CAB item description says it. Review the PR linked on the item, then set **Owner Approver**
+or **Security Approver** to yourself. Azure DevOps process rules on the `CAB` type make each
+field writable only by members of `CAB owners` / `CAB Security`, freeze the pipeline-written
+fields (PR Head SHA, PR URL, Release Tag, AKS manifest) once set, and require both approvers
+for state `ReadyForDeploy`. The app releases the gate when both fields are set and the PR head
+still equals PR Head SHA, then moves the item to `ReadyForDeploy`. `OWNER_APPROVERS` and
+`SECURITY_APPROVERS` are an optional second allowlist checked against the update history.
+
+ADO setup used for the PoC (inherited process `Promotion`, project `cab-poc`): work item type
+`CAB` (states New, ReadyForDeploy, Closed), identity fields `Custom.OwnerApprover` and
+`Custom.SecurityApprover`, text fields `Custom.PRHeadSHA`, `Custom.PRUrl`, `Custom.ReleaseTag`,
+`Custom.AKSmanifest`, project groups `CAB owners` and `CAB Security`, rules as above.
 
 ## 5. Run it
 

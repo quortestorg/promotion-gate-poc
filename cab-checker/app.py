@@ -6,14 +6,16 @@ release it by reading the CAB work item in Azure DevOps that the pull request li
 
 Approval conditions (all must hold):
   1. The PR body references exactly one CAB item (`AB#<id>`).
-  2. The CAB item carries tag `CAB-Approved-Owner`, last added by someone in
-     OWNER_APPROVERS, and tag `CAB-Approved-Security`, last added by someone in
-     SECURITY_APPROVERS. "Who added it" comes from the work item's update history, not from
-     the tag value, so a tag pasted by the wrong person does not count.
-  3. The `PR-HEAD-SHA:` recorded on the CAB item equals the commit the gated job runs on,
-     which promote-prod.yml arranged to be the PR head. A newer push therefore invalidates the
-     approval; in that case the two tags are removed from the CAB item and the deployment is
-     rejected with a reason.
+  2. The CAB item's identity fields `Custom.OwnerApprover` and `Custom.SecurityApprover` are
+     both set. Azure DevOps process rules make each field writable only by its group (CAB
+     owners, CAB Security), so the field value is the authorization. The app additionally
+     reads the work item's update history to record who set each field and, when
+     OWNER_APPROVERS / SECURITY_APPROVERS are configured, checks them against those lists.
+  3. The `Custom.PRHeadSHA` field equals the commit the gated job runs on, which
+     promote-prod.yml arranged to be the PR head. A newer push therefore invalidates the
+     approval; in that case both approver fields are cleared and the deployment is rejected
+     with a reason.
+  When approved, the app also moves the CAB item to state ReadyForDeploy.
 
 Until the conditions hold the deployment stays pending. The service re-evaluates every
 POLL_SECONDS and whenever Azure DevOps calls /ado-hook (a service hook on workitem.updated),
@@ -53,8 +55,10 @@ WEBHOOK_SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "").encode()
 ADO_ORG_URL = os.environ.get("ADO_ORG_URL", "").rstrip("/")
 ADO_PAT = os.environ.get("ADO_PAT", "")
 POLL_SECONDS = int(os.environ.get("POLL_SECONDS", "60"))
-TAG_OWNER = "CAB-Approved-Owner"
-TAG_SECURITY = "CAB-Approved-Security"
+F_OWNER = "Custom.OwnerApprover"
+F_SECURITY = "Custom.SecurityApprover"
+F_SHA = "Custom.PRHeadSHA"
+APPROVED_STATE = os.environ.get("CAB_APPROVED_STATE", "ReadyForDeploy")
 ENV_NAME_FILTER = os.environ.get("ENVIRONMENT_NAME", "prod")
 
 
@@ -122,40 +126,44 @@ def ado(method: str, path: str, **kw) -> requests.Response:
 
 
 def ado_work_item(wid: int) -> dict:
-    r = ado("GET", f"/_apis/wit/workitems/{wid}?fields=System.Tags,System.Description,System.State,System.Title")
+    r = ado("GET", f"/_apis/wit/workitems/{wid}?fields=System.State,System.Title,{F_OWNER},{F_SECURITY},{F_SHA}")
     r.raise_for_status()
     return r.json()
 
 
-def ado_tag_adders(wid: int) -> dict[str, str]:
-    """Return {tag: email-of-last-person-who-added-it} from the update history."""
+def ado_field_setters(wid: int) -> dict[str, str]:
+    """Return {field: email-of-last-person-who-set-it-to-a-value} from the update history."""
     r = ado("GET", f"/_apis/wit/workitems/{wid}/updates?$top=200")
     r.raise_for_status()
-    adders: dict[str, str] = {}
+    setters: dict[str, str] = {}
     for upd in r.json().get("value", []):
-        change = (upd.get("fields") or {}).get("System.Tags")
-        if not change:
-            continue
-        old = {t.strip() for t in (change.get("oldValue") or "").split(";") if t.strip()}
-        new = {t.strip() for t in (change.get("newValue") or "").split(";") if t.strip()}
         who = ((upd.get("revisedBy") or {}).get("uniqueName") or "").lower()
-        for t in new - old:
-            adders[t] = who
-        for t in old - new:
-            adders.pop(t, None)
-    return adders
+        for f in (F_OWNER, F_SECURITY):
+            change = (upd.get("fields") or {}).get(f)
+            if not change:
+                continue
+            if change.get("newValue"):
+                setters[f] = who
+            else:
+                setters.pop(f, None)
+    return setters
 
 
-def ado_remove_tags(wid: int, tags: set[str]) -> None:
-    wi = ado_work_item(wid)
-    current = [t.strip() for t in wi["fields"].get("System.Tags", "").split(";") if t.strip()]
-    remaining = "; ".join(t for t in current if t not in tags)
-    ado(
-        "PATCH",
-        f"/_apis/wit/workitems/{wid}",
-        headers={"Content-Type": "application/json-patch+json"},
-        data=json.dumps([{"op": "replace", "path": "/fields/System.Tags", "value": remaining}]),
-    ).raise_for_status()
+def identity_name(v) -> str:
+    if isinstance(v, dict):
+        return (v.get("uniqueName") or v.get("displayName") or "").lower()
+    return str(v or "").lower()
+
+
+def ado_patch(wid: int, ops: list[dict]) -> requests.Response:
+    r = ado("PATCH", f"/_apis/wit/workitems/{wid}", headers={"Content-Type": "application/json-patch+json"}, data=json.dumps(ops))
+    if not r.ok:
+        log.warning("ADO patch %s -> %s %s", wid, r.status_code, r.text[:300])
+    return r
+
+
+def ado_clear_approvals(wid: int) -> None:
+    ado_patch(wid, [{"op": "add", "path": f"/fields/{F_OWNER}", "value": ""}, {"op": "add", "path": f"/fields/{F_SECURITY}", "value": ""}])
 
 
 # ---------------------------------------------------------------- pending deployments
@@ -218,42 +226,45 @@ def evaluate(p: Pending) -> None:
     p.cab_id = ids[0]
     wi = ado_work_item(p.cab_id)
     f = wi["fields"]
-    tags = {t.strip() for t in f.get("System.Tags", "").split(";") if t.strip()}
-    m = re.search(r"PR-HEAD-SHA:\s*([0-9a-f]{40})", re.sub(r"<[^>]+>", " ", f.get("System.Description", "")))
-    recorded = m.group(1) if m else ""
+    recorded = (f.get(F_SHA) or "").strip().lower()
     pr_head = pr["head"]["sha"]
+    owner_val = identity_name(f.get(F_OWNER))
+    sec_val = identity_name(f.get(F_SECURITY))
 
-    adders = ado_tag_adders(p.cab_id)
-    up_by = adders.get(TAG_OWNER, "") if TAG_OWNER in tags else ""
-    sec_by = adders.get(TAG_SECURITY, "") if TAG_SECURITY in tags else ""
-    up_ok = bool(up_by) and up_by in OWNER_APPROVERS
-    sec_ok = bool(sec_by) and sec_by in SECURITY_APPROVERS
+    setters = ado_field_setters(p.cab_id)
+    owner_by = setters.get(F_OWNER, owner_val) if owner_val else ""
+    sec_by = setters.get(F_SECURITY, sec_val) if sec_val else ""
+    # ADO rules already restrict who can write each field; the allowlists are an optional second check.
+    owner_ok = bool(owner_val) and (not OWNER_APPROVERS or owner_by in OWNER_APPROVERS)
+    sec_ok = bool(sec_val) and (not SECURITY_APPROVERS or sec_by in SECURITY_APPROVERS)
 
-    def line(label, present_by, ok):
-        if not present_by:
+    def line(label, val, by, ok):
+        if not val:
             return f"{label}: pending"
-        return f"{label}: {'approved by ' + present_by if ok else 'tag added by ' + present_by + ', who is not an authorized approver'}"
+        return f"{label}: {'approved, ' + val + ' (set by ' + by + ')' if ok else 'set by ' + by + ', who is not an authorized approver'}"
 
     status = [
         f"CAB AB#{p.cab_id} `{f.get('System.Title','')}` (state {f.get('System.State','?')})",
-        line("Owner", up_by, up_ok),
-        line("Security", sec_by, sec_ok),
+        line("Owner", owner_val, owner_by, owner_ok),
+        line("Security", sec_val, sec_by, sec_ok),
     ]
 
-    if recorded and (recorded != p.sha or recorded != pr_head):
+    if recorded and (recorded != p.sha.lower() or recorded != pr_head.lower()):
         status.append(f"Head changed: CAB recorded `{recorded[:12]}`, gated commit `{p.sha[:12]}`, PR head `{pr_head[:12]}`. Approvals cleared; re-run promote-prod.")
-        if tags & {TAG_OWNER, TAG_SECURITY}:
-            ado_remove_tags(p.cab_id, {TAG_OWNER, TAG_SECURITY})
+        if owner_val or sec_val:
+            ado_clear_approvals(p.cab_id)
         report(p, "\n".join(status), state="rejected")
         return
     if not recorded:
-        status.append("CAB item has no PR-HEAD-SHA line; refusing to approve.")
+        status.append(f"CAB item has no {F_SHA}; refusing to approve.")
         report(p, "\n".join(status))
         return
 
-    if up_ok and sec_ok:
+    if owner_ok and sec_ok:
         status.append(f"Head `{p.sha[:12]}` matches. Releasing.")
         report(p, "\n".join(status), state="approved")
+        if f.get("System.State") != APPROVED_STATE:
+            ado_patch(p.cab_id, [{"op": "add", "path": "/fields/System.State", "value": APPROVED_STATE}])
     else:
         report(p, "\n".join(status))
 
