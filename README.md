@@ -11,7 +11,7 @@ promote-prod (manual)
    -> prod-gate on the PR branch
         environment `prod` holds the job until cab-checker sees
         both CAB approvals and an unchanged PR head (ADO)
-   -> prints OK -> auto-merge to main -> CAB stays ReadyForDeploy
+   -> prints OK -> auto-merge to main -> CAB Closed with the merge commit
    (cancelled gate -> CAB Rejected)
 ```
 
@@ -23,6 +23,6 @@ promote-prod (manual)
 | `.github/workflows/promote-prod.yml` | manual start: set release tag, render, open PR, create CAB item, start the gate |
 | `.github/workflows/prod-gate.yml` | the gated job on environment `prod`; prints OK when released |
 | `.github/workflows/render-check.yml` | required check: rendered file matches sources |
-| `.github/workflows/post-merge.yml` | after auto-merge: writes the merge commit onto the CAB item |
+| `.github/workflows/post-merge.yml` | after auto-merge: closes the CAB item with the merge commit |
 | `cab-checker/` | GitHub App implementing the custom deployment protection rule |
 | `docs/setup.md` | one-time setup and how to run |

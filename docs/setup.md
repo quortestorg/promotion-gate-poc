@@ -116,7 +116,7 @@ Then, in order:
 4. Approvers set Owner Approver and Security Approver on the CAB item. The app approves the
    rule, moves the CAB to ReadyForDeploy, the job prints OK.
 5. Auto-merge fires because the `prod` deployment now succeeded for the PR head. `post-merge`
-   writes the merge commit onto the CAB item. The CAB stays ReadyForDeploy.
+   closes the CAB item and records the merge commit in its history.
 
 Negative paths: cancel the `prod-gate` run and `reject-cab` sets the CAB to Rejected; push a
 commit to the promotion branch after approval and the app clears both approvers and rejects
