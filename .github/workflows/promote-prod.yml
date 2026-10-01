@@ -167,6 +167,10 @@ jobs:
              || gh pr create --base main --head "$BRANCH" --title "promote(prod): ${TAG}" --body-file /tmp/pr-body.md)
           NUM=${URL##*/}
           echo "url=$URL" >> "$GITHUB_OUTPUT"; echo "number=$NUM" >> "$GITHUB_OUTPUT"
+          # Arm auto-merge: GitHub merges the moment every ruleset requirement is met, which is
+          # when the `prod` deployment (the CAB gate) succeeds for this head. No later click, and
+          # no token with bypass rights: the merge is still impossible before the gate passes.
+          gh pr merge "$NUM" --auto --merge
 
       - name: Create CAB work item in Azure DevOps
         id: cab

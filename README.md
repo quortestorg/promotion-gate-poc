@@ -5,13 +5,14 @@ deployment protection rules, rulesets) plus one small GitHub App that reads the 
 Azure DevOps. Nothing is deployed anywhere; the gated job prints OK when the gate passes.
 
 ```text
-promote-prod (manual)  ->  PR with rendered manifest + CAB work item  ->  prod-gate on the PR branch
-                                                                           |
-                                              environment `prod` holds the job until:
-                                                required reviewers approve (GitHub)
-                                                cab-checker sees both CAB approvals + same head (ADO)
-                                                                           |
-                                                                        prints OK
+promote-prod (manual)
+   -> environment `prod-start`: required reviewer approves the start
+   -> render, PR with rendered manifest, CAB work item, auto-merge armed
+   -> prod-gate on the PR branch
+        environment `prod` holds the job until cab-checker sees
+        both CAB approvals and an unchanged PR head (ADO)
+   -> prints OK -> auto-merge to main -> CAB stays ReadyForDeploy
+   (cancelled gate -> CAB Rejected)
 ```
 
 | Path | Role |
@@ -22,5 +23,6 @@ promote-prod (manual)  ->  PR with rendered manifest + CAB work item  ->  prod-g
 | `.github/workflows/promote-prod.yml` | manual start: set release tag, render, open PR, create CAB item, start the gate |
 | `.github/workflows/prod-gate.yml` | the gated job on environment `prod`; prints OK when released |
 | `.github/workflows/render-check.yml` | required check: rendered file matches sources |
+| `.github/workflows/post-merge.yml` | after auto-merge: writes the merge commit onto the CAB item |
 | `cab-checker/` | GitHub App implementing the custom deployment protection rule |
 | `docs/setup.md` | one-time setup and how to run |
