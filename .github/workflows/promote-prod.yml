@@ -237,6 +237,20 @@ jobs:
           gh workflow run prod-gate.yml --ref "${{ steps.push.outputs.branch }}" \
             -f pr_number="${{ steps.pr.outputs.number }}" \
             -f cab_id="${{ steps.cab.outputs.id }}" \
+            -f cab_url="${{ steps.cab.outputs.url }}" \
             -f release_tag="${{ inputs.release_tag }}"
-          echo "PR: ${{ steps.pr.outputs.url }}"
-          echo "CAB: ${{ steps.cab.outputs.url }}"
+          sleep 10
+          GATE_URL=$(gh run list --workflow prod-gate.yml --branch "${{ steps.push.outputs.branch }}" --limit 1 --json url -q '.[0].url')
+          echo "PR:   ${{ steps.pr.outputs.url }}"
+          echo "CAB:  ${{ steps.cab.outputs.url }}"
+          echo "Gate: ${GATE_URL}"
+          {
+            echo "## Promotion ${{ inputs.release_tag }} staged"
+            echo
+            echo "| | |"; echo "|---|---|"
+            echo "| Rendered manifest PR | ${{ steps.pr.outputs.url }} |"
+            echo "| CAB work item | AB#${{ steps.cab.outputs.id }} ${{ steps.cab.outputs.url }} |"
+            echo "| Prod gate run (approve here) | ${GATE_URL} |"
+            echo
+            echo "Next: approvers set Owner Approver and Security Approver on the CAB item; a required reviewer approves the prod deployment on the gate run."
+          } >> "$GITHUB_STEP_SUMMARY"

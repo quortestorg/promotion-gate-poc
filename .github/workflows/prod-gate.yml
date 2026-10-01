@@ -26,6 +26,10 @@ on:
         required: false
         type: string
         default: ""
+      cab_url:
+        required: false
+        type: string
+        default: ""
       release_tag:
         required: true
         type: string
@@ -44,7 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: prod
-      url: ${{ github.server_url }}/${{ github.repository }}/pull/${{ inputs.pr_number }}
+      url: ${{ inputs.cab_url || format('{0}/{1}/pull/{2}', github.server_url, github.repository, inputs.pr_number) }}
     steps:
       - name: Gate passed
         env:
@@ -60,7 +64,7 @@ jobs:
             echo "| | |"; echo "|---|---|"
             echo "| Release | \`${{ inputs.release_tag }}\` |"
             echo "| PR | #${{ inputs.pr_number }} |"
-            echo "| CAB | AB#${{ inputs.cab_id }} |"
+            echo "| CAB | AB#${{ inputs.cab_id }} ${{ inputs.cab_url }} |"
             echo "| Gated commit | \`${{ github.sha }}\` |"
             echo "| Approvals | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} (Deployments tab) |"
           } >> "$GITHUB_STEP_SUMMARY"
