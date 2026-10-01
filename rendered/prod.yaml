@@ -3,7 +3,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   annotations:
-    poc.example.com/release-tag: v0.1.2
+    poc.example.com/release-tag: v0.1.1
   labels:
     app: web
     environment: prod
@@ -17,7 +17,7 @@ spec:
   template:
     metadata:
       annotations:
-        poc.example.com/release-tag: v0.1.2
+        poc.example.com/release-tag: v0.1.1
       labels:
         app: web
     spec:
@@ -46,7 +46,7 @@ data:
 kind: ConfigMap
 metadata:
   annotations:
-    poc.example.com/release-tag: v0.1.2
+    poc.example.com/release-tag: v0.1.1
   labels:
     environment: prod
   name: web-config
@@ -57,7 +57,7 @@ apiVersion: v1
 kind: Service
 metadata:
   annotations:
-    poc.example.com/release-tag: v0.1.2
+    poc.example.com/release-tag: v0.1.1
   labels:
     app: web
     environment: prod
