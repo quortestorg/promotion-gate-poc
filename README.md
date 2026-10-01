@@ -16,7 +16,7 @@ promote-prod (manual)
 
 rollback: CAB owner sets a Closed CAB to RollbackRequired
    -> app dispatches rollback-prod -> revert PR + Rollback item (type Rollback) -> same prod gate
-   -> auto-merge -> Rollback item and original CAB Closed
+   -> auto-merge -> Rollback item Closed, original CAB RolledBack
 ```
 
 | Path | Role |
