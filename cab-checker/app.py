@@ -274,7 +274,49 @@ def evaluate(p: Pending) -> None:
         report(p, "\n".join(status))
 
 
+# ---------------------------------------------------------------- rollback dispatcher
+
+GITHUB_REPO = os.environ.get("GITHUB_REPO", "")  # owner/repo that receives rollback-requested
+ROLLBACK_TAG = "RollbackDispatched"
+_install_cache: dict[str, int] = {}
+
+
+def repo_installation_id(repo: str) -> int:
+    if repo not in _install_cache:
+        r = requests.get(f"{GITHUB_API}/repos/{repo}/installation",
+                         headers={"Authorization": f"Bearer {app_jwt()}", "Accept": "application/vnd.github+json"}, timeout=20)
+        r.raise_for_status()
+        _install_cache[repo] = r.json()["id"]
+    return _install_cache[repo]
+
+
+def dispatch_rollbacks() -> None:
+    """A CAB owner moved a Closed CAB to RollbackRequired: tell the repo to start rollback-prod once."""
+    if not (GITHUB_REPO and ADO_ORG_URL and ADO_PAT):
+        return
+    q = {"query": "SELECT [System.Id] FROM WorkItems WHERE [System.WorkItemType] = 'CAB' AND [System.State] = 'RollbackRequired' "
+                  f"AND NOT [System.Tags] CONTAINS '{ROLLBACK_TAG}'"}
+    r = ado("POST", "/_apis/wit/wiql", headers={"Content-Type": "application/json"}, data=json.dumps(q))
+    if not r.ok:
+        log.warning("wiql failed %s %s", r.status_code, r.text[:200]); return
+    for w in r.json().get("workItems", []):
+        wid = w["id"]
+        wi = ado("GET", f"/_apis/wit/workitems/{wid}?fields=System.Tags,Custom.MergeSHA,Custom.ReleaseTag").json()["fields"]
+        iid = repo_installation_id(GITHUB_REPO)
+        resp = gh(iid, "POST", f"/repos/{GITHUB_REPO}/dispatches",
+                  json={"event_type": "rollback-requested", "client_payload": {"cab_id": wid, "release_tag": wi.get("Custom.ReleaseTag", ""), "merge_sha": wi.get("Custom.MergeSHA", "")}})
+        log.info("rollback dispatch CAB %s -> %s", wid, resp.status_code)
+        if resp.status_code == 204:
+            tags = [t.strip() for t in (wi.get("System.Tags") or "").split(";") if t.strip()] + [ROLLBACK_TAG]
+            ado_patch(wid, [{"op": "add", "path": "/fields/System.Tags", "value": "; ".join(tags)},
+                            {"op": "add", "path": "/fields/System.History", "value": f"rollback-prod started in {GITHUB_REPO} (repository_dispatch rollback-requested)."}])
+
+
 def evaluate_all() -> None:
+    try:
+        dispatch_rollbacks()
+    except Exception:
+        log.exception("rollback dispatch failed")
     with LOCK:
         items = [p for p in PENDING.values() if not p.done]
     for p in items:

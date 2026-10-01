@@ -55,6 +55,7 @@ gh label create promotion -R $REPO -c 0E8A16 -d "prod promotion PR"
 | `ADO_PAT` | secret | PAT with Work Items read and write |
 | `APP_ID` | variable | the cab-checker GitHub App id; the workflow mints a token from it to push, open the PR and dispatch the gate |
 | `APP_PRIVATE_KEY` | secret | the app's private key (PEM) |
+| (app env) `GITHUB_REPO` | app | `owner/repo` the app sends rollback-requested dispatches to |
 | `PROMOTION_TOKEN` | secret | optional fallback: fine-grained PAT scoped to this repo (Contents, Pull requests, Actions RW) if the app token is not configured |
 
 Without `ADO_ORG_URL` the workflow still opens the PR and starts the gate, but no CAB item is
@@ -121,3 +122,19 @@ Then, in order:
 Negative paths: cancel the `prod-gate` run and `reject-cab` sets the CAB to Rejected; push a
 commit to the promotion branch after approval and the app clears both approvers and rejects
 with "Head changed".
+
+## 6. Rollback
+
+1. A member of `CAB owners` moves a Closed CAB to **RollbackRequired** (a process rule disallows
+   that value for anyone else).
+2. The app's poll finds it, sends `repository_dispatch` `rollback-requested` with the CAB id to
+   the repo (`GITHUB_REPO` in the app env), and tags the CAB `RollbackDispatched`.
+3. `rollback-prod` reads the CAB's Merge SHA, reverts that merge on `rollback/<tag>`, re-renders,
+   opens the PR with the diff, creates a **Rollback** work item (same fields and approver rules,
+   linked to the CAB), arms auto-merge and starts `prod-gate` on the branch. No `prod-start`
+   pause: the owner's state change is the start decision.
+4. Approvers set both fields on the Rollback item; the gate releases; auto-merge lands the
+   revert; `post-merge` closes the Rollback item and the original CAB.
+
+Manual start for testing: `gh workflow run rollback-prod.yml -f cab_id=<id>` (the CAB must be in
+RollbackRequired).

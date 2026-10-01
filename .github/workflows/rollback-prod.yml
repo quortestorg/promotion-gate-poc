@@ -1,0 +1,210 @@
+name: rollback-prod
+
+# Rollback of a promoted change.
+#
+# Trigger: a CAB owner moves a Closed CAB item to RollbackRequired in Azure DevOps (a process
+# rule lets only the CAB owners group do that). The cab-checker app notices, sends this repo a
+# repository_dispatch `rollback-requested` with the CAB id, and tags the CAB RollbackDispatched.
+# The owner's state change IS the start decision, so there is no prod-start pause here.
+#
+# This workflow reverts the CAB's merge commit on a rollback/<tag> branch, re-renders the prod
+# manifest, opens a PR with the diff, creates a Rollback work item (same fields and approver
+# rules as a CAB, linked to the original CAB), arms auto-merge and starts prod-gate on the
+# branch. The Rollback item still needs both approvers; the gate releases, auto-merge lands the
+# revert, post-merge closes the Rollback item and the original CAB.
+
+on:
+  repository_dispatch:
+    types: [rollback-requested]
+  workflow_dispatch:
+    inputs:
+      cab_id:
+        description: Id of the Closed CAB item to roll back (must be in state RollbackRequired)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: rollback-prod
+  cancel-in-progress: false
+
+jobs:
+  revert-and-open-pr:
+    runs-on: ubuntu-latest
+    env:
+      CAB_ID: ${{ github.event.client_payload.cab_id || inputs.cab_id }}
+    steps:
+      - name: Mint GitHub App token
+        id: app
+        if: ${{ vars.APP_ID != '' }}
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app.outputs.token || secrets.PROMOTION_TOKEN || github.token }}
+
+      - name: Read the CAB item (merge SHA, tag, state)
+        id: cab
+        env:
+          ADO_PAT: ${{ secrets.ADO_PAT }}
+          ADO_ORG_URL: ${{ vars.ADO_ORG_URL }}
+        run: |
+          python3 - <<'PY'
+          import base64, json, os, urllib.request
+          e = os.environ
+          req = urllib.request.Request(f"{e['ADO_ORG_URL']}/_apis/wit/workitems/{e['CAB_ID']}?fields=System.State,System.WorkItemType,Custom.MergeSHA,Custom.ReleaseTag,Custom.PRUrl&api-version=7.1",
+                headers={"Authorization": "Basic " + base64.b64encode((":" + e['ADO_PAT']).encode()).decode()})
+          with urllib.request.urlopen(req) as r:
+              wi = json.load(r)
+          f = wi["fields"]
+          print(json.dumps(f, indent=1))
+          if f.get("System.WorkItemType") != "CAB":
+              raise SystemExit(f"::error::work item {e['CAB_ID']} is a {f.get('System.WorkItemType')}, not a CAB")
+          if f.get("System.State") != "RollbackRequired":
+              raise SystemExit(f"::error::CAB {e['CAB_ID']} is in state {f.get('System.State')}, expected RollbackRequired")
+          sha = (f.get("Custom.MergeSHA") or "").strip()
+          if len(sha) < 7:
+              raise SystemExit(f"::error::CAB {e['CAB_ID']} has no Merge SHA; nothing to revert")
+          with open(e["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"merge_sha={sha}\nrelease_tag={f.get('Custom.ReleaseTag','')}\ncab_url={wi['_links']['html']['href']}\norig_pr={f.get('Custom.PRUrl','')}\n")
+          PY
+
+      - name: Install tools
+        run: |
+          pip install --quiet pyyaml
+          curl -sSL "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.8.1/kustomize_v5.8.1_linux_amd64.tar.gz" | tar -xz -C /usr/local/bin kustomize
+
+      - name: Revert the merge commit and re-render
+        id: revert
+        env:
+          MERGE_SHA: ${{ steps.cab.outputs.merge_sha }}
+          TAG: ${{ steps.cab.outputs.release_tag }}
+        run: |
+          git config user.name "promotion-bot"
+          git config user.email "promotion-bot@users.noreply.github.com"
+          git cat-file -e "$MERGE_SHA^{commit}" || { echo "::error::merge commit $MERGE_SHA not found"; exit 1; }
+          BRANCH="rollback/${TAG}"
+          git checkout -B "$BRANCH" origin/main
+          if git rev-parse -q --verify "$MERGE_SHA^2" >/dev/null; then git revert --no-edit -m 1 "$MERGE_SHA"; else git revert --no-edit "$MERGE_SHA"; fi
+          git show origin/main:rendered/prod.yaml > /tmp/prod-before.yaml
+          bash tools/ci/render-prod.sh
+          git add -A && git commit -q --amend --no-edit
+          set +e; diff -u /tmp/prod-before.yaml rendered/prod.yaml > /tmp/prod.diff; set -e
+          head -c 60000 /tmp/prod.diff > /tmp/prod.diff.pr
+          git push --force-with-lease origin "$BRANCH"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"; echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Open rollback PR
+        id: pr
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token || secrets.PROMOTION_TOKEN || github.token }}
+          TAG: ${{ steps.cab.outputs.release_tag }}
+          MERGE_SHA: ${{ steps.cab.outputs.merge_sha }}
+          BRANCH: ${{ steps.revert.outputs.branch }}
+          HEAD: ${{ steps.revert.outputs.head_sha }}
+          CAB_URL: ${{ steps.cab.outputs.cab_url }}
+          ORIG_PR: ${{ steps.cab.outputs.orig_pr }}
+        run: |
+          REPO_URL="${{ github.server_url }}/${{ github.repository }}"
+          {
+            echo "## Rollback of ${TAG}"
+            echo
+            echo "| | |"; echo "|---|---|"
+            echo "| Rolls back CAB | ${CAB_ID} ${CAB_URL} |"
+            echo "| Reverted commit | ${REPO_URL}/commit/${MERGE_SHA} |"
+            echo "| Original PR | ${ORIG_PR} |"
+            echo "| Rollback head | \`${HEAD}\` |"
+            echo
+            echo "### Rendered manifest diff (\`rendered/prod.yaml\`)"
+            echo; echo '```diff'; cat /tmp/prod.diff.pr; echo '```'; echo
+            echo "_Rollback item link is added by the workflow after it is created._"
+          } > /tmp/pr-body.md
+          URL=$(gh pr create --base main --head "$BRANCH" --title "rollback(prod): ${TAG}" --body-file /tmp/pr-body.md --label promotion)
+          NUM=${URL##*/}
+          echo "url=$URL" >> "$GITHUB_OUTPUT"; echo "number=$NUM" >> "$GITHUB_OUTPUT"
+          gh pr merge "$NUM" --auto --merge
+
+      - name: Create Rollback work item
+        id: rb
+        env:
+          ADO_PAT: ${{ secrets.ADO_PAT }}
+          ADO_ORG_URL: ${{ vars.ADO_ORG_URL }}
+          ADO_PROJECT: ${{ vars.ADO_PROJECT }}
+          TAG: ${{ steps.cab.outputs.release_tag }}
+          MERGE_SHA: ${{ steps.cab.outputs.merge_sha }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+          HEAD: ${{ steps.revert.outputs.head_sha }}
+          CAB_URL: ${{ steps.cab.outputs.cab_url }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          export REPO_URL="${{ github.server_url }}/${{ github.repository }}"
+          python3 - <<'PY'
+          import base64, json, os, urllib.request, urllib.parse
+          e = os.environ
+          manifest_url = f"{e['REPO_URL']}/blob/{e['HEAD']}/rendered/prod.yaml"
+          desc = f"""<p><b>Change:</b> roll back release <b>{e['TAG']}</b> on prod by reverting <a href="{e['REPO_URL']}/commit/{e['MERGE_SHA']}">{e['MERGE_SHA'][:12]}</a>.</p>
+          <p><b>Rolls back CAB:</b> <a href="{e['CAB_URL']}">AB#{e['CAB_ID']}</a></p>
+          <p><b>Rollback PR:</b> <a href="{e['PR_URL']}">{e['PR_URL']}</a></p>
+          <p><b>Resulting manifest at the reviewed commit:</b> <a href="{manifest_url}">rendered/prod.yaml @ {e['HEAD'][:12]}</a></p>
+          <p><b>Pipeline run:</b> <a href="{e['RUN_URL']}">{e['RUN_URL']}</a></p>
+          <p><b>How to approve:</b> review the PR, then set <b>Owner Approver</b> and <b>Security Approver</b>. The gate releases when both are set and the PR head still equals <b>PR Head SHA</b>.</p>"""
+          cab_api = f"{e['ADO_ORG_URL']}/_apis/wit/workItems/{e['CAB_ID']}"
+          patch = [
+            {"op":"add","path":"/fields/System.Title","value":f"Rollback: {e['TAG']} on prod"},
+            {"op":"add","path":"/fields/System.Description","value":desc},
+            {"op":"add","path":"/fields/System.Tags","value":"PromotionPoC; Rollback"},
+            {"op":"add","path":"/fields/Custom.PRHeadSHA","value":e['HEAD']},
+            {"op":"add","path":"/fields/Custom.PRUrl","value":e['PR_URL']},
+            {"op":"add","path":"/fields/Custom.ReleaseTag","value":e['TAG']},
+            {"op":"add","path":"/fields/Custom.AKSmanifest","value":manifest_url},
+            {"op":"add","path":"/relations/-","value":{"rel":"System.LinkTypes.Related","url":cab_api,"attributes":{"comment":"Rolls back this CAB"}}},
+            {"op":"add","path":"/relations/-","value":{"rel":"Hyperlink","url":e['PR_URL'],"attributes":{"comment":"Rollback PR"}}},
+          ]
+          url = f"{e['ADO_ORG_URL']}/{urllib.parse.quote(e['ADO_PROJECT'])}/_apis/wit/workitems/$Rollback?api-version=7.1"
+          req = urllib.request.Request(url, data=json.dumps(patch).encode(), method="POST", headers={
+            "Content-Type":"application/json-patch+json",
+            "Authorization":"Basic "+base64.b64encode((":"+e['ADO_PAT']).encode()).decode()})
+          with urllib.request.urlopen(req) as r:
+            wi = json.load(r)
+          print("created Rollback", wi["id"], wi["_links"]["html"]["href"])
+          with open(e["GITHUB_OUTPUT"],"a") as f:
+            f.write(f"id={wi['id']}\nurl={wi['_links']['html']['href']}\n")
+          PY
+
+      - name: Link Rollback item on the PR and start the gate
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token || secrets.PROMOTION_TOKEN || github.token }}
+          NUM: ${{ steps.pr.outputs.number }}
+          RB_ID: ${{ steps.rb.outputs.id }}
+          RB_URL: ${{ steps.rb.outputs.url }}
+        run: |
+          gh pr view "$NUM" --json body -q .body > /tmp/body.md
+          python3 - <<'PY'
+          import os
+          p = "/tmp/body.md"; s = open(p, encoding="utf-8").read()
+          marker = "_Rollback item link is added by the workflow after it is created._"
+          link = f"**Rollback item:** AB#{os.environ['RB_ID']} {os.environ['RB_URL']}"
+          open(p, "w", encoding="utf-8").write(s.replace(marker, link) if marker in s else s + "\n\n" + link + "\n")
+          PY
+          gh pr edit "$NUM" --body-file /tmp/body.md
+          gh workflow run prod-gate.yml --ref "${{ steps.revert.outputs.branch }}" \
+            -f pr_number="$NUM" -f cab_id="$RB_ID" -f cab_url="$RB_URL" -f release_tag="rollback-${{ steps.cab.outputs.release_tag }}"
+          sleep 10
+          GATE_URL=$(gh run list --workflow prod-gate.yml --branch "${{ steps.revert.outputs.branch }}" --limit 1 --json url -q '.[0].url')
+          {
+            echo "## Rollback of ${{ steps.cab.outputs.release_tag }} staged"
+            echo
+            echo "| | |"; echo "|---|---|"
+            echo "| Rolls back CAB | AB#${CAB_ID} ${{ steps.cab.outputs.cab_url }} |"
+            echo "| Rollback PR | ${{ steps.pr.outputs.url }} |"
+            echo "| Rollback work item | AB#${RB_ID} ${RB_URL} |"
+            echo "| Prod gate run | ${GATE_URL} |"
+          } >> "$GITHUB_STEP_SUMMARY"
