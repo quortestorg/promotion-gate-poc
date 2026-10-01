@@ -243,8 +243,9 @@ def evaluate(p: Pending) -> None:
             return f"{label}: pending"
         return f"{label}: {'approved, ' + val + ' (set by ' + by + ')' if ok else 'set by ' + by + ', who is not an authorized approver'}"
 
+    cab_url = ((wi.get("_links") or {}).get("html") or {}).get("href") or f"{ADO_ORG_URL}/_workitems/edit/{p.cab_id}"
     status = [
-        f"CAB AB#{p.cab_id} `{f.get('System.Title','')}` (state {f.get('System.State','?')})",
+        f"CAB AB#{p.cab_id} `{f.get('System.Title','')}` (state {f.get('System.State','?')}): {cab_url}",
         line("Owner", owner_val, owner_by, owner_ok),
         line("Security", sec_val, sec_by, sec_ok),
     ]
