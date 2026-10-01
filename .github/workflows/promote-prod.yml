@@ -220,7 +220,14 @@ jobs:
           CAB_URL: ${{ steps.cab.outputs.url }}
         run: |
           gh pr view "$NUM" --json body -q .body > /tmp/body.md
-          sed -i "s#_CAB link is added by the workflow after the work item is created._#**CAB:** AB#${CAB_ID} ${CAB_URL}#" /tmp/body.md
+          python3 - <<'PY'
+          import os
+          p = "/tmp/body.md"; s = open(p, encoding="utf-8").read()
+          marker = "_CAB link is added by the workflow after the work item is created._"
+          link = f"**CAB:** AB#{os.environ['CAB_ID']} {os.environ['CAB_URL']}"
+          s = s.replace(marker, link) if marker in s else s + "\n\n" + link + "\n"
+          open(p, "w", encoding="utf-8").write(s)
+          PY
           gh pr edit "$NUM" --body-file /tmp/body.md
 
       - name: Start the prod gate on the PR branch
