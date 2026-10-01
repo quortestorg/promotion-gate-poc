@@ -5,16 +5,16 @@ name: prod-gate
 # Started by promote-prod.yml on the promotion branch, so this run's commit IS the PR head.
 # That matters twice: the environment's deployment record is bound to the PR head, which is
 # what the ruleset rule "require deployments to succeed before merging" checks; and the
-# cab-checker app compares this commit with the PR-HEAD-SHA recorded on the CAB item, so an
-# approval cannot carry over to a later push.
+# cab-checker app compares this commit with Custom.PRHeadSHA on the CAB item, so an approval
+# cannot carry over to a later push.
 #
-# The `gate` job targets environment `prod`. GitHub pauses it there until every protection
-# rule on the environment passes:
-#   1. required reviewers (owners, DevOps) approve in the run UI, and
-#   2. the cab-checker custom deployment protection rule approves, which it does only when the
-#      CAB work item carries both approval tags, added by authorized approvers, and the head SHA
-#      still matches.
-# When released, the job prints OK. Nothing is deployed; that is the whole PoC.
+# The `gate` job targets environment `prod`, whose only protection rule is the cab-checker
+# custom deployment protection rule. GitHub pauses the job until the app approves, which it
+# does only when the CAB work item carries both approver identities and the head SHA still
+# matches. When released, the job prints OK. Nothing is deployed; that is the whole PoC.
+#
+# If the gate is cancelled, rejected or times out, `reject-cab` moves the CAB item to Rejected
+# and says so on the PR.
 
 on:
   workflow_dispatch:
@@ -56,7 +56,7 @@ jobs:
         run: |
           echo "OK: prod gate passed for ${{ inputs.release_tag }}"
           echo "  PR      #${{ inputs.pr_number }}"
-          echo "  CAB     AB#${{ inputs.cab_id }}"
+          echo "  CAB     AB#${{ inputs.cab_id }} ${{ inputs.cab_url }}"
           echo "  commit  ${{ github.sha }}"
           {
             echo "## prod gate: OK"
@@ -66,7 +66,39 @@ jobs:
             echo "| PR | #${{ inputs.pr_number }} |"
             echo "| CAB | AB#${{ inputs.cab_id }} ${{ inputs.cab_url }} |"
             echo "| Gated commit | \`${{ github.sha }}\` |"
-            echo "| Approvals | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} (Deployments tab) |"
+            echo "| Decisions | ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} (Deployments tab) |"
           } >> "$GITHUB_STEP_SUMMARY"
           gh pr comment "${{ inputs.pr_number }}" -R "${{ github.repository }}" --body \
-            "prod gate **OK** for \`${{ inputs.release_tag }}\` at \`${{ github.sha }}\` (run ${{ github.run_id }}). The merge is now unblocked by the \`prod\` deployment rule." || true
+            "prod gate **OK** for \`${{ inputs.release_tag }}\` at \`${{ github.sha }}\` (run ${{ github.run_id }}, CAB AB#${{ inputs.cab_id }}). The merge is now unblocked by the \`prod\` deployment rule." || true
+
+  reject-cab:
+    needs: gate
+    if: ${{ always() && needs.gate.result != 'success' && inputs.cab_id != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mark CAB rejected
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ADO_PAT: ${{ secrets.ADO_PAT }}
+          ADO_ORG_URL: ${{ vars.ADO_ORG_URL }}
+          CAB_ID: ${{ inputs.cab_id }}
+          RESULT: ${{ needs.gate.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 - <<'PY'
+          import base64, json, os, urllib.request
+          e = os.environ
+          ops = [
+            {"op": "add", "path": "/fields/System.State", "value": "Rejected"},
+            {"op": "add", "path": "/fields/System.History", "value": f"Prod gate ended with result '{e['RESULT']}' before approval: {e['RUN_URL']}"},
+          ]
+          req = urllib.request.Request(f"{e['ADO_ORG_URL']}/_apis/wit/workitems/{e['CAB_ID']}?api-version=7.1", data=json.dumps(ops).encode(), method="PATCH",
+                headers={"Content-Type": "application/json-patch+json", "Authorization": "Basic " + base64.b64encode((":" + e['ADO_PAT']).encode()).decode()})
+          try:
+              with urllib.request.urlopen(req) as r:
+                  print("CAB", e['CAB_ID'], "->", json.load(r)["fields"]["System.State"])
+          except urllib.error.HTTPError as ex:
+              print("::warning::could not mark CAB rejected:", ex.read()[:300])
+          PY
+          gh pr comment "${{ inputs.pr_number }}" -R "${{ github.repository }}" --body \
+            "prod gate **not passed** (result: ${RESULT}). CAB AB#${CAB_ID} marked Rejected. Re-run promote-prod to try again." || true

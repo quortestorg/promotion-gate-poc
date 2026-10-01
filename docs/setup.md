@@ -1,10 +1,11 @@
 # Setup
 
-Scope: only the prod gate. A person starts `promote-prod`, the pipeline renders the prod
-manifest, opens a PR and a CAB work item, and starts `prod-gate` on the PR branch. That job
-sits on the `prod` environment until the required reviewers approve in GitHub and the
-`cab-checker` app confirms the CAB item is approved by the owner and security roles. It then
-prints OK. Nothing is deployed.
+Scope: only the prod gate. A person starts `promote-prod`. Its first job pauses on environment
+`prod-start` until a required reviewer approves. Then the pipeline renders the prod manifest,
+opens a PR and a CAB work item, and starts `prod-gate` on the PR branch. That job sits on the
+`prod` environment until the `cab-checker` app confirms the CAB item is approved by the owner
+and security roles. It then prints OK. If the gate is cancelled or times out, the CAB item is
+set to Rejected. Nothing is deployed.
 
 ## 0. Plan constraint
 
@@ -16,10 +17,11 @@ reason and holds only sample manifests and workflow code.
 
 | Setting | Value | Why |
 | --- | --- | --- |
-| Environment `prod` > Required reviewers | owner team, DevOps team (any one approves); "Prevent self-review" on once a second account exists | human approval, recorded on the run |
+| Environment `prod-start` > Required reviewers | owner team, DevOps team (any one approves); "Prevent self-review" on once a second account exists | human decision to start, recorded on the run, before anything is created |
+| Environment `prod-start` > Deployment branches | Selected branches: `main` | start only from main |
+| Environment `prod` > Deployment protection rules | `cab-checker` only, no required reviewers | the CAB check |
 | Environment `prod` > Deployment branches and tags | Selected branches: `promote/*` | the gated job runs on the PR branch |
-| Environment `prod` > Allow administrators to bypass | off | admins are held too |
-| Environment `prod` > Deployment protection rules | enable `cab-checker` after the app is installed | the CAB check |
+| Both environments > Allow administrators to bypass | off | admins are held too |
 | Ruleset on `main` | require PR; required status check `rendered manifest matches sources`; require deployments to succeed: `prod`; no bypass actors | merge stays blocked until the gate passed for the PR head |
 | Label | `promotion` | marks promotion PRs |
 

@@ -2,14 +2,14 @@ name: promote-prod
 
 # Gate C proof of concept, step 1 of 2.
 #
-# Manually started. Renders the prod overlay with the requested release tag, opens a pull
+# Manually started. First job pauses on environment `prod-start` until a required reviewer
+# approves. Then it renders the prod overlay with the requested release tag, opens a pull
 # request that carries the rendered manifest (the artifact the CAB reviews), creates the CAB
-# work item in Azure DevOps with links back to the PR and to the commits included, and then
-# starts prod-gate.yml on the PR branch. Nothing here is gated and nothing is deployed.
+# work item in Azure DevOps with links back to the PR and to the commits included, and starts
+# prod-gate.yml on the PR branch. Nothing is deployed.
 #
-# The gate itself lives in prod-gate.yml: its job targets the `prod` environment, whose
-# protection rules (required reviewers + the cab-checker custom rule) hold it until the CAB
-# is approved.
+# The second gate lives in prod-gate.yml: its job targets the `prod` environment, whose only
+# protection rule is the cab-checker app, which holds it until the CAB is approved.
 
 on:
   workflow_dispatch:
@@ -34,9 +34,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  render-and-open-pr:
-    # Only from main. workflow_dispatch already requires write access on the repo.
+  # Gate 1: a human decides this promotion should start at all. Environment `prod-start`
+  # carries the required reviewers (owners, DevOps); nothing is rendered or created until one
+  # of them approves here. Cancelling at this point leaves no trace: no branch, no PR, no CAB.
+  approve-start:
     if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: prod-start
+    steps:
+      - run: echo "Promotion of ${{ inputs.release_tag }} approved to start by a required reviewer (see run approvals)."
+
+  render-and-open-pr:
+    needs: approve-start
     runs-on: ubuntu-latest
     outputs:
       pr_number: ${{ steps.pr.outputs.number }}

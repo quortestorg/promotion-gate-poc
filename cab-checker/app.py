@@ -250,6 +250,10 @@ def evaluate(p: Pending) -> None:
         line("Security", sec_val, sec_by, sec_ok),
     ]
 
+    if f.get("System.State") in ("Rejected", "Closed"):
+        status.append(f"CAB is {f.get('System.State')}; rejecting this deployment.")
+        report(p, "\n".join(status), state="rejected")
+        return
     if recorded and (recorded != p.sha.lower() or recorded != pr_head.lower()):
         status.append(f"Head changed: CAB recorded `{recorded[:12]}`, gated commit `{p.sha[:12]}`, PR head `{pr_head[:12]}`. Approvals cleared; re-run promote-prod.")
         if owner_val or sec_val:
