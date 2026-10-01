@@ -3,8 +3,9 @@ name: post-merge
 # After a promotion or rollback PR merges (auto-merge fires once the prod gate passed):
 #   promote/<tag>  -> close the CAB item, record the merge commit in Merge SHA (used by a later
 #                     rollback) and in the history.
-#   rollback/<tag> -> close the Rollback item with the merge commit, and close the original CAB
-#                     (which was in RollbackRequired) noting the rollback.
+#   rollback/<tag> -> close the Rollback item with the merge commit, and set the original CAB
+#                     (which was in RollbackRequired) to RolledBack, so a rolled-back change is
+#                     distinguishable from one that is still live.
 
 on:
   pull_request:
@@ -60,6 +61,6 @@ jobs:
               if m:
                   cab = int(m.group(1))
                   print("CAB", cab, "->", patch(cab, [
-                      {"op": "add", "path": "/fields/System.State", "value": "Closed"},
-                      {"op": "add", "path": "/fields/System.History", "value": f"Rolled back by Rollback AB#{item}, merged as {link}. Closed by post-merge."}]))
+                      {"op": "add", "path": "/fields/System.State", "value": "RolledBack"},
+                      {"op": "add", "path": "/fields/System.History", "value": f"Rolled back by Rollback AB#{item}, merged as {link}. State set to RolledBack by post-merge."}]))
           PY
