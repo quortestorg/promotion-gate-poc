@@ -175,7 +175,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           [ -n "$ADO_PAT" ] || { echo "::error::ADO_PAT secret is not set"; exit 1; }
-          REPO_URL="${{ github.server_url }}/${{ github.repository }}"
+          export REPO_URL="${{ github.server_url }}/${{ github.repository }}"
           python3 - <<'PY'
           import base64, json, os, urllib.request, urllib.parse
           e = os.environ
