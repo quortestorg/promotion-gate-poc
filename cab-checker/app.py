@@ -58,7 +58,8 @@ POLL_SECONDS = int(os.environ.get("POLL_SECONDS", "60"))
 F_OWNER = "Custom.OwnerApprover"
 F_SECURITY = "Custom.SecurityApprover"
 F_SHA = "Custom.PRHeadSHA"
-APPROVED_STATE = os.environ.get("CAB_APPROVED_STATE", "ReadyForDeploy")
+APPROVED_STATE = os.environ.get("CAB_APPROVED_STATE", "ReadyForDeploy")            # CAB items
+ROLLBACK_APPROVED_STATE = os.environ.get("ROLLBACK_APPROVED_STATE", "ReadyForRollback")  # Rollback items
 ENV_NAME_FILTER = os.environ.get("ENVIRONMENT_NAME", "prod")
 
 
@@ -126,7 +127,7 @@ def ado(method: str, path: str, **kw) -> requests.Response:
 
 
 def ado_work_item(wid: int) -> dict:
-    r = ado("GET", f"/_apis/wit/workitems/{wid}?fields=System.State,System.Title,{F_OWNER},{F_SECURITY},{F_SHA}")
+    r = ado("GET", f"/_apis/wit/workitems/{wid}?fields=System.State,System.Title,System.WorkItemType,{F_OWNER},{F_SECURITY},{F_SHA}")
     r.raise_for_status()
     return r.json()
 
@@ -268,8 +269,9 @@ def evaluate(p: Pending) -> None:
     if owner_ok and sec_ok:
         status.append(f"Head `{p.sha[:12]}` matches. Releasing.")
         report(p, "\n".join(status), state="approved")
-        if f.get("System.State") != APPROVED_STATE:
-            ado_patch(p.cab_id, [{"op": "add", "path": "/fields/System.State", "value": APPROVED_STATE}])
+        target = ROLLBACK_APPROVED_STATE if f.get("System.WorkItemType") == "Rollback" else APPROVED_STATE
+        if f.get("System.State") != target:
+            ado_patch(p.cab_id, [{"op": "add", "path": "/fields/System.State", "value": target}])
     else:
         report(p, "\n".join(status))
 

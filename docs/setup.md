@@ -133,8 +133,8 @@ with "Head changed".
    opens the PR with the diff, creates a **Rollback** work item (same fields and approver rules,
    linked to the CAB), arms auto-merge and starts `prod-gate` on the branch. No `prod-start`
    pause: the owner's state change is the start decision.
-4. Approvers set both fields on the Rollback item; the gate releases; auto-merge lands the
-   revert; `post-merge` closes the Rollback item and sets the original CAB to **RolledBack**, so
+4. Approvers set both fields on the Rollback item; the app moves it to **ReadyForRollback** and
+   releases the gate; auto-merge lands the revert; `post-merge` closes the Rollback item and sets the original CAB to **RolledBack**, so
    a rolled-back change is distinguishable from one still live.
 
 Manual start for testing: `gh workflow run rollback-prod.yml -f cab_id=<id>` (the CAB must be in
